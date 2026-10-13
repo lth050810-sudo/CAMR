@@ -1,6 +1,6 @@
 {
   "version": "CAMR-K8-150K/v1",
-  "method": "CAMR V5 more_learned (validated 2026-10-08)",
+  "method": "CAMR V5 more_learned with IGNORE",
   "events": 150000,
   "seed": 42,
   "initialization": "Fresh Qwen3-8B-Base, all 8,190,735,360 parameters trainable",
@@ -14,7 +14,7 @@
     "replay_k": 8,
     "add_replay_k": 8,
     "ignore_replay_k": 8,
-    "ignore_behavior": "disabled",
+    "ignore_behavior": "original",
     "replay_selection": "learned",
     "similarity_threshold": 0.65,
     "merge_similar_k": 6,

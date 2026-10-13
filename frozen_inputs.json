@@ -1,11 +1,12 @@
 {
+  ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
   ".gitignore": "36c7e935acf9a6907341d81ebd4df6b871b662637fc9dc683bd9e11b059906e7",
-  "README.md": "dfd175e5322eaac4fe29818768fdfd11947597b49e2f7fa063541b09045af5e4",
   "data_audit.json": "08e2c20e3daff6c34383bc2e4dfd7638900dc91dbee51fa31e2878764a0c18a6",
   "evaluate.py": "4ec7edbf93f3b8b46e6cd8c65f2499362744de88c8de2eb7c1018ed902e9b833",
-  "experiment_plan.json": "c58947c32427854043fffc7b181915d11f83b5e2a1b12033d84887116eed934e",
+  "experiment_plan.json": "2c6d1b2ca7fb18a1a2d393d885a42a8dea631c2d56595b1f01dc240220168ac9",
   "prepare.py": "4ef5d9e2c50ac08c2df2a84f6413d07c26aade9c7e29132d8980df7815f22d20",
-  "source_changes.json": "0c4036bc455211d59f73758438ea956085e3550e2273ea48db1f52bd5db2d8d9",
+  "README.md": "ef0eaa9d934a0bcb39db785ec90d68976a68c59ac09834a73e33ec32109267d0",
+  "source_changes.json": "f43ff25482bac2fecd4c7b9298aaa149aadcd0e0866ec18cc522f0ba16ecf902",
   "source_snapshot/baselines/__init__.py": "57ba00622312028f9f6b0c40f1a28e28600818b0e6a2e128c68f0717d3cf5fe1",
   "source_snapshot/baselines/common.py": "778eca4daeab8937dd64bfedab369534b13b5c3f3ca79524f0a5287c5eb11532",
   "source_snapshot/baselines/engram_continual_core.py": "daa9cda9d38a29fafdec1def20d0a367c6487d205aa8051f40ddd25bcef68caf",
@@ -27,5 +28,5 @@
   "supervise.py": "cf80005d06cca54548bdbafafa4be19c62cb8f94795af3bd34c08641b8a915a8",
   "trace_backend.py": "0a08d2fc6afdf5f430f10ac02649f2cbe5580f53d8ecc94bdaea6b5a00d0f5cc",
   "trace_protocol.py": "0c27c6ac07a344a17f641e387ba2d539b9f80b8eaf35949671bb532a4b204b91",
-  "train.py": "8c8107111d9a4684a606588592db05f42fb70d185e98f0572297b774ced875a6"
+  "train.py": "179b9493edeb3cf0691319ce4bd0cac55445104d416b36e92dd38d9d6369175d"
 }

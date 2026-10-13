@@ -1,6 +1,7 @@
 {
   "reference": "/root/engram/runs/wikibigedit_camr_k8_tracks_20261008",
   "base_source": "Identical to the validated 2026-10-08 more_learned sources",
+  "public_release": "Latest V5 K8 source with the original IGNORE behavior enabled; no older method variants are included.",
   "changes": {
     "source_snapshot/baselines/run_engram_full.py": {
       "before": "elif stage_done and (not args.no_stage_eval or event_cursor == len(events)):",

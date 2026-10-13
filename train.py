@@ -42,7 +42,7 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
         '--no-activation-checkpointing', '--training-loss', 'role_mean', '--training-views', '1',
         '--training-view-policy', 'accepted_only', '--history-only-loss-policy', 'follow_training_loss',
         '--current-loss-weight', '0.2', '--replay-k', '8', '--add-replay-k', '8', '--ignore-replay-k', '8',
-        '--ignore-behavior', 'disabled', '--replay-selection', 'learned', '--merge-similar-k', '6',
+        '--ignore-behavior', 'original', '--replay-selection', 'learned', '--merge-similar-k', '6',
         '--uniform-replay-fraction', '0.25', '--recent-replay-k', '0', '--reward-mode', 'normalized',
         '--gamma', '0', '--cost-weight', '0', '--probe-size', '8', '--probe-selection', 'stage_stratified',
         '--policy-lr', '3e-4', '--policy-hidden-dim', '32', '--rollout-steps', '32', '--max-grad-norm', '1.0',
