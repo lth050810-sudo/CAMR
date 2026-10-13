@@ -61,8 +61,8 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
     args = runner.parse_args(values)
     args.trace_task = 'WikiBigEdit'
     args.trace_micro_tokens = 16384
-    args.trial_version = 'CAMR-paper-K4-150K/v1'
-    args.method_version = 'CAMR V5 paper-reference K4'
+    args.trial_version = 'CAMR-K4-150K/v1'
+    args.method_version = 'CAMR'
     args.external_final_evaluation = True
     return args
 

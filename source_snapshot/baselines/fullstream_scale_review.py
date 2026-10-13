@@ -317,7 +317,7 @@ def install(policy_module):
 
 def select_replay(action, available, related, k, rng, history_stats, event_index, similar_k=2,
                   recent_k=0, recent_window=64, ignore_replay=False):
-    """Exact v3 hybrid replay, without copying/sorting the whole row pool.
+    """Exact hybrid replay, without copying/sorting the whole row pool.
 
     All available statistics are still validated on each invocation, so even
     external modifications cannot bypass the original transactional checks.

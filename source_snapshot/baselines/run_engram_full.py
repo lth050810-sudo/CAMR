@@ -36,16 +36,15 @@ from baselines.engram_full_safety import (
 from baselines.engram_frozen_encoder import HFMeanPoolEncoder, fact_document
 from baselines.engram_full_stream import make_events, read_schedule, select_rows
 from baselines.engram_online_policy import OnlineWriterPolicy
-from baselines.engram_replay_v3 import select_replay
-from baselines.engram_replay_v4 import StageStratifiedSampler, select_learned_replay
-from baselines.engram_reward_v4 import RewardCalibrator
+from baselines.engram_replay import StageStratifiedSampler, select_learned_replay, select_replay
+from baselines.engram_reward import RewardCalibrator
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = Path(os.environ.get('CAMR_MODEL_DIR', REPOSITORY_ROOT / 'models/Qwen3-8B-Base'))
 ENCODER_DIR = os.environ.get('CAMR_ENCODER_DIR', str(REPOSITORY_ROOT / 'models/all-mpnet-base-v2'))
 AXES = ('update', 'rephrase', 'persona', 'locality', 'multihop')
-STATE_VERSION = 'engram-full-online/v4'
+STATE_VERSION = 'camr-online/v1'
 WRITER_TRAIN_FIELDS = (
     'sample_id', 'stage', 'update', 'ans', 'subject', 'subject_id',
     'relation', 'relation_id', 'object', 'object_id', 'tag', 'scope',
@@ -66,8 +65,8 @@ def source_fingerprints():
             ('run_engram_full.py', 'engram_full_backend.py', 'engram_online_policy.py',
              'engram_continual_core.py', 'common.py', 'engram_full_safety.py',
              'engram_grad_norm.py', 'engram_frozen_encoder.py', 'engram_full_stream.py',
-             'engram_replay_v3.py', 'engram_training_views.py', 'longstream_protocol.py',
-             'fullstream_scale_review.py', 'engram_replay_v4.py', 'engram_reward_v4.py')}
+             'engram_replay.py', 'engram_training_views.py', 'longstream_protocol.py',
+             'fullstream_scale_review.py', 'engram_reward.py')}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -117,7 +116,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument('--ignore-replay-k', type=int, default=None,
                    help='Safe-history-only maintenance for IGNORE; defaults to --replay-k. Zero disables maintenance.')
     p.add_argument('--ignore-behavior', choices=['original', 'disabled', 'current_only', 'skip_step'],
-                   default='original', help='V4 control: original skips current; disabled masks IGNORE; '
+                   default='original', help='IGNORE control: original skips current; disabled masks IGNORE; '
                    'current_only trains current without replay; skip_step trains neither.')
     p.add_argument('--replay-selection', choices=['legacy', 'hybrid', 'learned'], default=None,
                    help='Hybrid reserves history for semantic neighbors, age coverage and uniform replay.')

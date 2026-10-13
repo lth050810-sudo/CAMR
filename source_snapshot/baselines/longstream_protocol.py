@@ -78,10 +78,10 @@ def cost_plan(rows, target=100000, batch_size=8):
             'cumulative_replay_selections': sum(b['start'] for b in bs),
             'cumulative_training_presentations': sum(b['end'] for b in bs),
             'cumulative_optimizer_steps': sum(math.ceil(b['end'] / batch_size) for b in bs),
-            'random_k8_max_replay_selections': sum(min(i, 8) for i in range(target)),
+            'random_k4_max_replay_selections': sum(min(i, 4) for i in range(target)),
             'ours_current_steps_per_event': 1,
-            'ours_max_fact_presentations': sum(1 + min(i, 8) for i in range(target)),
-            'ours_max_view_presentations': 2 * sum(1 + min(i, 8) for i in range(target))}
+            'ours_max_fact_presentations': sum(1 + min(i, 4) for i in range(target)),
+            'ours_max_view_presentations': 2 * sum(1 + min(i, 4) for i in range(target))}
 
 
 def quotas_with_unlabeled_fallback(groups, total):
@@ -219,7 +219,7 @@ def build(output, data_dir, model_dir, total=100000, seed=42):
     atomic(output, manifest)
     atomic(output.parent / 'data_audit.json', manifest['audit'])
     atomic(output.parent / 'prefix_cost_plan.json', {str(n): cost_plan(records, n) for n in PREFIXES if n <= total})
-    # Strict QA-only teacher boundary, matching the selected enhanced V3 recipe.
+    # Strict QA-only teacher boundary, matching the selected CAMR recipe.
     train_only = [{'sample_id': r['sample_id'], 'update': r['update'], 'ans': r['ans'],
                    'subject': r.get('subject') or ''} for r in records]
     for shard in range(8):

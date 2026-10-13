@@ -1,6 +1,6 @@
-# CAMR V5 Paper Reference (K=4)
+# CAMR
 
-This repository contains the CAMR V5 code aligned with the paper's default
+This repository contains the CAMR code aligned with the paper's default
 reference configuration. The K=8 replay-budget experiment is a scaling
 variant in the paper; the primary configuration here uses K=4.
 

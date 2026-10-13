@@ -1,7 +1,7 @@
 {
   "reference": "ARR26_Oct (4), Sections 4.2-4.3 and Appendix F",
-  "base_source": "Validated V5 sources, reconciled to the paper-reference configuration",
-  "public_release": "Latest CAMR V5 paper-reference K4 source only; no older method variants are included.",
+  "base_source": "Validated CAMR sources, reconciled to the paper-reference configuration",
+  "public_release": "CAMR paper-reference source; no legacy versioned modules are included.",
   "changes": {
     "source_snapshot/baselines/run_engram_full.py": {
       "before": "elif stage_done and (not args.no_stage_eval or event_cursor == len(events)):",

@@ -32,7 +32,7 @@ def main():
     payload = read(HERE / 'manifest.json')
     rows = payload['samples']
     plan = {
-        'method': 'CAMR V5 paper-reference K4',
+        'method': 'CAMR',
         'manifest_sha256': sha(HERE / 'manifest.json'),
         'selection': payload['selection'],
         'evaluation_denominators': {
@@ -144,7 +144,7 @@ def main():
                     100 * values['match_accuracy'], values['exact_count'], 100 * values['exact_accuracy']])
         lines = ['# WikiBigEdit 150K：CAMR 论文参考配置（K=4）全参数结果', '',
             plan['selection'], '',
-            '方法：CAMR V5 论文参考配置（K=4），Qwen3-8B-Base 全参数，seed 42。', '',
+            '方法：CAMR 论文参考配置（K=4），Qwen3-8B-Base 全参数，seed 42。', '',
             '主表沿用旧 100K 口径：直接问法使用预先冻结的歧义/冲突排除名单，Locality 使用每阶段 64 题的冻结面板。', '',
             '| 指标 | Match | Exact | Match 正确数 / 有效题数 |', '|---|---:|---:|---:|']
         for axis, values in metrics.items():

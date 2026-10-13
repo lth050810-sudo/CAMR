@@ -498,7 +498,7 @@ class FullParameterBackend:
         sequence_count = int(batch['attention_mask'].sum().item())
         answer_count = int((batch['labels'][:, 1:] != -100).sum().item())
         # Count roles before any rank replication. Block baselines explicitly
-        # tag every row; online V3 uses the first fact as current by default.
+        # tag every row; CAMR uses the first fact as current by default.
         current_facts = {i for i, row in enumerate(rows)
                          if row.get('_stream_role', 'current' if has_current and i == 0 else 'replay') == 'current'}
         current_views = [i for i, fact in enumerate(fact_indices) if fact in current_facts]
