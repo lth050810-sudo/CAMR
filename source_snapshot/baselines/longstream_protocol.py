@@ -264,11 +264,14 @@ def evaluate(driver, rows, metadata, cursor, checkpoint, full_prefix=False, base
 
 
 if __name__ == '__main__':
+    import os
     p = argparse.ArgumentParser()
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--data-dir', type=Path, default=Path('/root/engram/WikiBigEdit/full_hf_viewer'))
-    p.add_argument('--model-dir', type=Path, default=Path('/root/engram/Qwen3-8B-Base'))
+    p.add_argument('--data-dir', type=Path, default=os.getenv('CAMR_DATA_ROOT'))
+    p.add_argument('--model-dir', type=Path, default=os.getenv('CAMR_MODEL_DIR'))
     p.add_argument('--total', type=int, default=100000)
     p.add_argument('--seed', type=int, default=42)
     a = p.parse_args()
+    if a.data_dir is None or a.model_dir is None:
+        p.error('--data-dir/--model-dir or CAMR_DATA_ROOT/CAMR_MODEL_DIR is required')
     build(a.output, a.data_dir, a.model_dir, a.total, a.seed)

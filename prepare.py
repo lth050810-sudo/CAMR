@@ -2,15 +2,17 @@
 import argparse
 from collections import Counter, defaultdict
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
-import shutil
 import sys
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(HERE / 'source_snapshot'))
 from baselines.common import atomic_json, qa_prompt, normalize_answer as normalize_text
+
+PAPER_MAX_LENGTH = 128
 
 
 def sha(path):
@@ -20,34 +22,24 @@ def sha(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--selection', choices=['contiguous', 'balanced'], default='contiguous')
+    parser.add_argument('--data-root', type=Path,
+                        default=Path(os.environ['CAMR_DATA_ROOT']) if os.getenv('CAMR_DATA_ROOT') else None)
+    parser.add_argument('--model-dir', type=Path,
+                        default=Path(os.environ['CAMR_MODEL_DIR']) if os.getenv('CAMR_MODEL_DIR') else None)
+    parser.add_argument('--encoder-dir', type=Path,
+                        default=Path(os.environ['CAMR_ENCODER_DIR']) if os.getenv('CAMR_ENCODER_DIR') else None)
+    parser.add_argument('--reference-manifest', type=Path,
+                        help='Optional prior manifest used only for overlap auditing.')
     opts = parser.parse_args()
-    reference = ROOT / 'runs/wikibigedit_camr_k8_tracks_20261008'
+    for name in ('data_root', 'model_dir', 'encoder_dir'):
+        if getattr(opts, name) is None:
+            parser.error(f'--{name.replace("_", "-")} or CAMR_{name.upper()} is required')
     snapshot = HERE / 'source_snapshot/baselines'
-    snapshot.mkdir(parents=True, exist_ok=True)
-    for p in (ROOT / 'baselines').glob('*.py'):
-        old = reference / 'source_snapshot/baselines' / p.name
-        if old.exists() and sha(old) != sha(p):
-            raise ValueError(f'Latest validated source differs: {p.name}')
-        shutil.copy2(p, snapshot / p.name)
-    for name in ['trace_backend.py', 'trace_protocol.py']:
-        shutil.copy2(reference / name, HERE / name)
-    # Evaluation is a separate resumable job after the final checkpoint commits.
-    # The training/replay/reward/update code is unchanged.
-    runner = snapshot / 'run_engram_full.py'
-    text = runner.read_text()
-    old = 'elif stage_done and (not args.no_stage_eval or event_cursor == len(events)):'
-    new = 'elif stage_done and (not args.no_stage_eval or event_cursor == len(events)) and not getattr(args, "external_final_evaluation", False):'
-    assert text.count(old) == 1
-    runner.write_text(text.replace(old, new))
-    changes = {
-        'reference': str(reference),
-        'base_source': 'Identical to the validated 2026-10-08 more_learned sources',
-        'changes': {'source_snapshot/baselines/run_engram_full.py': {
-            'before': old, 'after': new,
-            'reason': 'Save training state before running the separate resumable four-axis evaluation.'}},
-        'training_algorithm_changed': False,
-    }
-    data_root = ROOT / 'WikiBigEdit/full_hf_viewer'
+    required = [snapshot / 'run_engram_full.py', snapshot / 'longstream_protocol.py',
+                HERE / 'trace_backend.py', HERE / 'trace_protocol.py']
+    if any(not path.is_file() for path in required):
+        raise FileNotFoundError('The committed CAMR source snapshot is incomplete')
+    data_root = opts.data_root
     source = json.loads((data_root / 'manifest.json').read_text())
     rows, sources = [], []
     for desc in sorted(source['files'], key=lambda x: x['stage']):
@@ -67,64 +59,25 @@ def main():
             assert all(isinstance(row.get(k), str) and row[k].strip() for k in ['update', 'ans']), row['sample_id']
             rows.append(row)
     assert len(rows) == len({r['sample_id'] for r in rows}) == 150000
-    old_rows = json.loads((reference / 'manifest.json').read_text())['samples']
+    old_rows = (json.loads(opts.reference_manifest.read_text())['samples']
+                if opts.reference_manifest else None)
     protocol = None
     if opts.selection == 'balanced':
         # Match the historical 100K tag/relation stratification, eligibility,
         # deduplication and deterministic sampling; change only the stage quota.
-        import importlib.util
         protocol_source = snapshot / 'longstream_protocol.py'
-        protocol_text = protocol_source.read_text()
-        previous = "            reason = _basic_invalid_reason(row, {'new', 'update'})"
-        assert protocol_text.count(previous) == 1
-        protocol_text = protocol_text.replace(previous, "            reason = _basic_invalid_reason(row, {'new', 'update', ''})")
-        previous = '        seen_fact, seen_qa = local_fact, local_qa\n'
-        assert protocol_text.count(previous) == 1
-        protocol_text = protocol_text.replace(previous,
-            "        previously_eligible = [r for r in raw if _basic_invalid_reason(r, {'new', 'update'}) is None]\n"
-            "        seen_fact.update(_fact_fingerprint(r) for r in previously_eligible)\n"
-            "        seen_qa.update((norm(r['update']), norm(r['ans'])) for r in previously_eligible)\n")
-        insertion = '        records.extend(chosen)\n'
-        replacement = ('        seen_fact.update(_fact_fingerprint(r) for r in chosen)\n'
-                       "        seen_qa.update((norm(r['update']), norm(r['ans'])) for r in chosen)\n"
-                       + insertion)
-        assert protocol_text.count(insertion) == 1
-        protocol_text = protocol_text.replace(insertion, replacement)
-        protocol_text = protocol_text.replace('        quotas = apportioned(groups, target)',
-                                              '        quotas = quotas_with_unlabeled_fallback(groups, target)')
-        protocol_text = protocol_text.replace("reserve.sort(key=lambda r: digest([seed, 'fill', r['sample_id']]))",
-            "reserve.sort(key=lambda r: (r.get('tag') not in ('new', 'update'), digest([seed, 'fill', r['sample_id']])))")
-        quota_helper = '''\ndef quotas_with_unlabeled_fallback(groups, total):
-    labeled = {k: v for k, v in groups.items() if k[0] in ('new', 'update')}
-    unlabeled = {k: v for k, v in groups.items() if k[0] not in ('new', 'update')}
-    labeled_total = min(total, sum(len(v) for v in labeled.values()))
-    result = dict.fromkeys(groups, 0)
-    result.update(apportioned(labeled, labeled_total))
-    if labeled_total < total:
-        result.update(apportioned(unlabeled, total - labeled_total))
-    return result
-
-'''
-        protocol_text = protocol_text.replace('\ndef build(output,', quota_helper + '\ndef build(output,')
-        protocol_source.write_text(protocol_text)
-        changes['changes']['source_snapshot/baselines/longstream_protocol.py'] = {
-            'before': 'Only source rows tagged new/update are eligible',
-            'after': 'Prioritize the same new/update strata; fill an interval shortfall with QA-complete native rows whose original tag is empty. Keep empty tags, token filtering and deduplication. Prefer labeled reserves. Historical exclusion of earlier labeled source facts is retained; selected unlabeled facts are also excluded from later intervals.',
-            'reason': 'Interval 2 has only 18,369 valid unique labeled rows before token filtering, independently of cross-stage deduplication; the requested quota is 18,750.',
-            'discarded_attempt': 'Restricting cross-stage deduplication to selected facts did not resolve the shortfall and is not used.'}
         spec = importlib.util.spec_from_file_location('protocol_150k', protocol_source)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        module.build(HERE / 'protocol' / 'manifest.json', data_root, ROOT / 'Qwen3-8B-Base', total=150000, seed=42)
+        module.build(HERE / 'protocol' / 'manifest.json', data_root, opts.model_dir, total=150000, seed=42)
         protocol = json.loads((HERE / 'protocol/manifest.json').read_text())
         rows = protocol['records']
         assert len(rows) == 150000
-    else:
-        assert rows[:5000] == old_rows
+    elif old_rows is not None:
+        assert rows[:5000] == old_rows[:5000]
     selection = ('First 150,000 consecutive native records in chronological interval order; no shuffle, filtering, deduplication or resampling.'
                  if opts.selection == 'contiguous' else
                  '18,750 records per native interval, eight chronological intervals. Historical 100K tag/relation stratification, token eligibility, deduplication and source ordering; seed 42. Prefer new/update labels; fill interval shortages with QA-complete native rows whose original tag is empty, retaining that tag and auditing their count.')
-    atomic_json(HERE / 'source_changes.json', changes)
     payload = dict(schema_version='wikibigedit-camr-150k/v1', selection=selection,
                    selection_mode=opts.selection, sources=sources, samples=rows)
     if protocol:
@@ -136,8 +89,8 @@ def main():
     print(json.dumps({'status': 'auditing_token_lengths', 'rows': len(rows),
                       'stages': dict(Counter(r['stage'] for r in rows))}), flush=True)
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(ROOT / 'Qwen3-8B-Base', local_files_only=True)
-    encoder = AutoTokenizer.from_pretrained('/mnt/yy2607004_hs/embedding_models/all-mpnet-base-v2', local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(opts.model_dir, local_files_only=True)
+    encoder = AutoTokenizer.from_pretrained(opts.encoder_dir, local_files_only=True)
     maximum = Counter()
     axes = {'update': ('update', 'ans'), 'rephrase': ('rephrase', 'ans'),
             'persona': ('personas', 'ans'), 'locality': ('loc', 'loc_ans')}
@@ -151,7 +104,7 @@ def main():
                       add_special_tokens=True)['input_ids']
         for i, (p, a, e) in enumerate(zip(prompts, answers, emb)):
             length = len(p) + len(a) + 1
-            assert length <= 512 and len(e) <= 512, chunk[i]['sample_id']
+            assert length <= PAPER_MAX_LENGTH and len(e) <= PAPER_MAX_LENGTH, chunk[i]['sample_id']
             train_lengths.append((length, start + i))
             maximum['training_tokens'] = max(maximum['training_tokens'], length)
             maximum['embedding_tokens'] = max(maximum['embedding_tokens'], len(e))
@@ -163,7 +116,7 @@ def main():
             if valid:
                 lengths = [len(x) for x in tokenizer([qa_prompt(r[q]).rstrip() for r in valid],
                                                    add_special_tokens=False)['input_ids']]
-                assert max(lengths) <= 512, (axis, start, max(lengths))
+                assert max(lengths) <= PAPER_MAX_LENGTH, (axis, start, max(lengths))
                 maximum[axis + '_prompt_tokens'] = max(maximum[axis + '_prompt_tokens'], max(lengths))
         if (start + len(chunk)) % 20000 == 0:
             print(json.dumps({'status': 'auditing', 'rows': start + len(chunk)}), flush=True)
@@ -194,8 +147,12 @@ def main():
         locality_unique_questions=len(locality_answers),
         locality_multitarget_questions=sum(len(a) > 1 for a in locality_answers.values()),
         locality_training_question_overlap_rows=locality_overlap,
-        first_5000_identical_to_latest_development=opts.selection == 'contiguous', stress_rows=len(stress_rows),
-        latest_development_qa_overlap=len({(r['update'], r['ans']) for r in rows} & {(r['update'], r['ans']) for r in old_rows}))
+        first_5000_identical_to_reference=(rows[:5000] == old_rows[:5000]
+                                             if old_rows is not None else None),
+        stress_rows=len(stress_rows),
+        reference_qa_overlap=(len({(r['update'], r['ans']) for r in rows} &
+                                  {(r['update'], r['ans']) for r in old_rows})
+                              if old_rows is not None else None))
     primary_counts = ({a: len(protocol['stage_evaluation_ids'][a] if a == 'locality'
                                 else protocol['primary_evaluation_ids'][a]) for a in axes}
                       if protocol else dict(counts))

@@ -10,7 +10,7 @@ import traceback
 
 from suite_utils import HERE, CHECKPOINT_ROOT, atomic, read, checkpoint_inventory
 
-PYTHON = '/root/engram/.venv-qwen3/bin/python'
+PYTHON = os.environ.get('CAMR_PYTHON', sys.executable)
 
 
 def main():

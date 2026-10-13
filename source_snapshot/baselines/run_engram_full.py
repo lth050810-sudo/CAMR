@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import random
 import time
 from collections import Counter
@@ -40,8 +41,9 @@ from baselines.engram_replay_v4 import StageStratifiedSampler, select_learned_re
 from baselines.engram_reward_v4 import RewardCalibrator
 
 
-MODEL_DIR = Path('/root/engram/Qwen3-8B-Base')
-ENCODER_DIR = '/mnt/yy2607004_hs/embedding_models/all-mpnet-base-v2'
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+MODEL_DIR = Path(os.environ.get('CAMR_MODEL_DIR', REPOSITORY_ROOT / 'models/Qwen3-8B-Base'))
+ENCODER_DIR = os.environ.get('CAMR_ENCODER_DIR', str(REPOSITORY_ROOT / 'models/all-mpnet-base-v2'))
 AXES = ('update', 'rephrase', 'persona', 'locality', 'multihop')
 STATE_VERSION = 'engram-full-online/v4'
 WRITER_TRAIN_FIELDS = (
@@ -109,7 +111,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument('--eval-batch-size', type=int, default=16)
     p.add_argument('--activation-checkpointing', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--flash-attention', action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument('--replay-k', type=int, default=8)
+    p.add_argument('--replay-k', type=int, default=4)
     p.add_argument('--add-replay-k', type=int, default=None,
                    help='Safe-history rows for ADD; defaults to --replay-k. Zero gives a current-only ADD ablation.')
     p.add_argument('--ignore-replay-k', type=int, default=None,
@@ -142,7 +144,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument('--max-candidates', type=int, default=64)
     p.add_argument('--policy-lr', type=float, default=3e-4)
     p.add_argument('--policy-hidden-dim', type=int, default=32)
-    p.add_argument('--rollout-steps', type=int, default=32)
+    p.add_argument('--rollout-steps', type=int, default=4)
     p.add_argument('--gamma', type=float, default=0.95)
     p.add_argument('--entropy-coef', type=float, default=0.01)
     p.add_argument('--value-coef', type=float, default=0.5)
@@ -165,11 +167,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.replay_selection is None:
         args.replay_selection = 'learned' if optimized else 'hybrid'
     if args.reward_mode is None:
-        args.reward_mode = 'normalized_delayed' if optimized else 'raw'
+        args.reward_mode = 'raw'
     if args.probe_selection is None:
-        args.probe_selection = 'stage_stratified' if optimized else 'uniform'
+        args.probe_selection = 'uniform'
     if args.probe_size is None:
-        args.probe_size = 8 if optimized else 4
+        args.probe_size = 4
     if args.matched_random_loss and args.mode != 'random_replay':
         p.error('--matched-random-loss is only for explicitly named random-replay controls')
     if args.mode == 'random_replay' and not args.matched_random_loss:
@@ -214,7 +216,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.replay_selection in ('hybrid', 'learned') and args.merge_similar_k < 1:
         p.error('Hybrid MERGE must reserve at least one semantic neighbor')
     if args.model_dir.resolve() != MODEL_DIR.resolve():
-        p.error('This experiment is fixed to /root/engram/Qwen3-8B-Base.')
+        p.error(f'This run is fixed to CAMR_MODEL_DIR={MODEL_DIR}.')
     if args.replay_schedule and args.mode != 'random_replay':
         p.error('--replay-schedule is only supported by random_replay.')
     if not math.isfinite(args.lora_dropout) or not 0 <= args.lora_dropout < 1:
@@ -226,7 +228,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.longstream and (args.steps_per_event != 1 or args.repeat_every):
         p.error('Longstream single-current-pass requires steps_per_event=1 and no diagnostic repeats')
     if args.checkpoint_dir is None:
-        args.checkpoint_dir = Path('/mnt/yy2607004_hs/engram_checkpoints') / args.output_dir.name
+        root = Path(os.environ.get('CAMR_CHECKPOINT_ROOT', args.output_dir.parent / 'checkpoints'))
+        args.checkpoint_dir = root / args.output_dir.name
     return args
 
 
@@ -543,7 +546,7 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         'split_audit': metadata.get('split_audit'), 'sample_ids': [r['sample_id'] for r in rows],
         'oracle_structure_access': args.fact_mode == 'structured',
         'equivalence_scope': memory.equivalence_method, 'stream_is_diagnostic': bool(args.repeat_every),
-        'mastery_metric': 'normalized exact greedy answer AND answer NLL threshold',
+        'mastery_metric': 'current answer-token NLL threshold only (for an active equivalent record)',
         'ignore_effect': {
             'original': 'skip certified redundant current; train selected history',
             'disabled': 'mask IGNORE; every current enters training',
@@ -571,8 +574,8 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
             'always_add=current only; random_replay=random history (ADD only; scheduled actions are restricted to ADD)'
         )),
         'probe_policy': args.probe_selection + '; pre-action training history only; disjoint from this event replay',
-        'reward': args.reward_mode + '; separately scaled current and retention NLL gains minus trained-token cost; '
-                  'delayed mode replaces pending rewards before the same frozen-policy rollout update',
+        'reward': args.reward_mode + '; raw mode uses current gain + retention_weight * mean probe gain '
+                  '- cost_weight * logical training tokens / 128; normalized modes are ablations',
         'delayed_reward_scope': 'history measured again at rollout boundary; observed outcome includes intervening updates, not a counterfactual effect',
         'reward_calibration': reward_calibrator.state_dict()['config'],
         'finalized_reward_log': 'delayed_rewards.jsonl; actions.jsonl contains explicitly marked provisional rewards in delayed mode',
@@ -731,12 +734,12 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         before, probe_tokens = driver.answer_nll([row] + probes)
         allow_ignore = (args.ignore_behavior != 'disabled' and bool(query['duplicate_rows'])
                         and before[0] <= args.mastery_nll and not retired_now)
+        # Section 4.2: once an active equivalent record exists and no
+        # retirement is requested, IGNORE mastery is determined solely by
+        # the current answer-token NLL threshold. Generation is evaluation,
+        # not an additional writer-policy gate.
         mastery_prediction = None
         mastery_tokens = 0
-        if allow_ignore:
-            mastery_prediction = driver.generate([row['update']])[0]
-            allow_ignore = strict_mastery_match(mastery_prediction, row['ans'])
-            mastery_tokens = int(getattr(driver.backend, 'last_generation_stats', {}).get('logical_sequence_tokens', 0))
         allow_merge = bool(related)
         features = [query['top_similarity'], float(bool(query['duplicate_rows'])),
                     min(before[0] / 10, 2.0), min(sum(before[1:]) / max(1, len(probes)) / 10, 2.0),
@@ -851,9 +854,7 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
             # Maintenance can disturb a fact that was mastered before the step.
             # Observe it without adding this current fact to the gradient batch.
             if train_stats:
-                post_ignore_prediction = driver.generate([row['update']])[0]
-                mastery_tokens += int(getattr(driver.backend, 'last_generation_stats', {}).get('logical_sequence_tokens', 0))
-                post_ignore_mastered = after[0] <= args.mastery_nll and strict_mastery_match(post_ignore_prediction, row['ans'])
+                post_ignore_mastered = after[0] <= args.mastery_nll
             else:
                 post_ignore_prediction, post_ignore_mastered = mastery_prediction, allow_ignore
         current_gain = before[0] - after[0]

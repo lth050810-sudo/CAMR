@@ -1,4 +1,4 @@
-"""Eight-GPU CAMR more_learned, preserving the validated training algorithm."""
+"""Eight-GPU CAMR paper-reference training entry point."""
 import argparse
 from functools import lru_cache
 import json
@@ -22,7 +22,13 @@ from suite_utils import CHECKPOINT_ROOT, AXES, atomic, read, checkpoint_inventor
 class WikiBackend(TraceBackend):
     @lru_cache(maxsize=180000)
     def encoded(self, question, answer):
-        return training_encoding(self.tokenizer, dict(update=question, ans=answer), 'WikiBigEdit')
+        encoded = training_encoding(self.tokenizer, dict(update=question, ans=answer), 'WikiBigEdit')
+        if len(encoded[0]) > self.max_length:
+            raise ValueError(
+                f'WikiBigEdit training example has {len(encoded[0])} tokens; '
+                f'the paper-reference maximum is {self.max_length}'
+            )
+        return encoded
 
     def generate(self, questions):
         return super().generate([qa_prompt(q) for q in questions])
@@ -33,7 +39,7 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
         '--manifest', str(manifest), '--output-dir', str(output), '--checkpoint-dir', str(CHECKPOINT_ROOT),
         '--parameter-mode', 'full', '--mode', 'policy', '--fact-mode', 'structured',
         '--fsdp-sharding-strategy', 'shard_grad_op', '--learning-rate', '2e-6',
-        '--steps-per-event', '1', '--seed', '42', '--max-length', '512', '--max-new-tokens', '64',
+        '--steps-per-event', '1', '--seed', '42', '--max-length', '128', '--max-new-tokens', '64',
         '--eval-batch-size', '512', '--log-every', '100', '--skip-base-eval', '--no-stage-eval',
         '--eval-axes', 'update', 'rephrase', 'persona', 'locality',
         '--locality-panel-size', '0', '--multihop-panel-size', '0',
@@ -41,11 +47,13 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
         '--no-save-final-checkpoint' if stress else '--save-final-checkpoint',
         '--no-activation-checkpointing', '--training-loss', 'role_mean', '--training-views', '1',
         '--training-view-policy', 'accepted_only', '--history-only-loss-policy', 'follow_training_loss',
-        '--current-loss-weight', '0.2', '--replay-k', '8', '--add-replay-k', '8', '--ignore-replay-k', '8',
-        '--ignore-behavior', 'original', '--replay-selection', 'learned', '--merge-similar-k', '6',
-        '--uniform-replay-fraction', '0.25', '--recent-replay-k', '0', '--reward-mode', 'normalized',
-        '--gamma', '0', '--cost-weight', '0', '--probe-size', '8', '--probe-selection', 'stage_stratified',
-        '--policy-lr', '3e-4', '--policy-hidden-dim', '32', '--rollout-steps', '32', '--max-grad-norm', '1.0',
+        '--current-loss-weight', '0.5', '--replay-k', '4', '--add-replay-k', '4', '--ignore-replay-k', '4',
+        '--ignore-behavior', 'original', '--replay-selection', 'learned', '--merge-similar-k', '4',
+        '--uniform-replay-fraction', '0.5', '--recent-replay-k', '0', '--reward-mode', 'raw',
+        '--gamma', '0.95', '--cost-weight', '0.01', '--probe-size', '4', '--probe-selection', 'uniform',
+        '--similarity-threshold', '0.65', '--mastery-nll', '0.25', '--retention-weight', '1.0',
+        '--entropy-coef', '0.01', '--value-coef', '0.5',
+        '--policy-lr', '3e-4', '--policy-hidden-dim', '32', '--rollout-steps', '4', '--max-grad-norm', '1.0',
         '--stop-after-events', str(stop),
     ]
     if resume:
@@ -53,8 +61,8 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
     args = runner.parse_args(values)
     args.trace_task = 'WikiBigEdit'
     args.trace_micro_tokens = 16384
-    args.trial_version = 'CAMR-K8-150K/v1'
-    args.method_version = 'CAMR V5 more_learned 2026-10-08'
+    args.trial_version = 'CAMR-paper-K4-150K/v1'
+    args.method_version = 'CAMR V5 paper-reference K4'
     args.external_final_evaluation = True
     return args
 
@@ -85,7 +93,7 @@ def main():
     backend = WikiBackend(args)
     assert backend.world_size == 8
     assert backend.metadata['trainable_parameters'] == backend.metadata['parameter_count'] == 8190735360
-    backend.metadata.update(experiment='WikiBigEdit CAMR K8 150K',
+    backend.metadata.update(experiment='WikiBigEdit CAMR paper-reference K4 150K',
         lm_template='Question: ...\nAnswer:', generation='greedy KV-cache, distributed examples',
         context_truncation=False, checkpoint_retention='Keep all experiment checkpoints')
     if backend.rank:

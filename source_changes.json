@@ -1,7 +1,7 @@
 {
-  "reference": "/root/engram/runs/wikibigedit_camr_k8_tracks_20261008",
-  "base_source": "Identical to the validated 2026-10-08 more_learned sources",
-  "public_release": "Latest V5 K8 source only; no older method variants are included.",
+  "reference": "ARR26_Oct (4), Sections 4.2-4.3 and Appendix F",
+  "base_source": "Validated V5 sources, reconciled to the paper-reference configuration",
+  "public_release": "Latest CAMR V5 paper-reference K4 source only; no older method variants are included.",
   "changes": {
     "source_snapshot/baselines/run_engram_full.py": {
       "before": "elif stage_done and (not args.no_stage_eval or event_cursor == len(events)):",
@@ -15,5 +15,9 @@
       "discarded_attempt": "Restricting cross-stage deduplication to selected facts did not resolve the shortfall and is not used."
     }
   },
-  "training_algorithm_changed": false
+  "training_algorithm_changed": true,
+  "paper_alignment": {
+    "configuration": "K=4, P=4, alpha=0.5, rollout=4, gamma=0.95, raw reward, cost weight=0.01",
+    "ignore_mastery": "Active equivalent record, no retirement, and current answer-token NLL <= 0.25; no generation gate"
+  }
 }

@@ -2,8 +2,9 @@
 
 Integration: use ``safe_query`` instead of the runner's filtered_query,
 ``choose_safe_probe_and_replay_pools`` instead of its pool helper, and
-``strict_mastery_match`` for the generation check before allowing IGNORE.
-Keep the NLL/duplicate/retirement gates and benchmark scoring separately.
+``strict_mastery_match`` for lossless fact identity and retirement checks.
+IGNORE itself follows the paper's active-equivalence, retirement and
+answer-NLL gates; generation-based scoring remains evaluation-only.
 
 Ambiguity is conservative exclusion, never implicit retirement. Each query
 scans only O(N) historical metadata; vector similarities are computed solely

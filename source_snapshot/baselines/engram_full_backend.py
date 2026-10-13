@@ -56,7 +56,8 @@ from baselines.engram_training_views import (
 )
 
 
-FIXED_MODEL_DIR = Path('/root/engram/Qwen3-8B-Base')
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+FIXED_MODEL_DIR = Path(os.environ.get('CAMR_MODEL_DIR', REPOSITORY_ROOT / 'models/Qwen3-8B-Base'))
 CHECKPOINT_SCHEMA = 'engram-full-writer-backend/v1'
 LORA_TARGET_MODULES = ('q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj')
 HISTORY_ONLY_LOSS_POLICIES = ('follow_training_loss', 'legacy_fact_mean')

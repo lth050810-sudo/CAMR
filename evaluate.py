@@ -32,7 +32,7 @@ def main():
     payload = read(HERE / 'manifest.json')
     rows = payload['samples']
     plan = {
-        'method': 'CAMR V5 more_learned',
+        'method': 'CAMR V5 paper-reference K4',
         'manifest_sha256': sha(HERE / 'manifest.json'),
         'selection': payload['selection'],
         'evaluation_denominators': {
@@ -125,8 +125,8 @@ def main():
             atomic(output / 'partial_metrics.json', metrics)
     assert backend.parameter_fingerprint() == fingerprint, 'Evaluation changed the parameters'
     if backend.rank == 0:
-        result = dict(status='complete', method=plan['method'], trained_events=150000, k=8, seed=42,
-            parameter_mode='full', training_steps=150000, evaluation_training_steps=0, world_size=8,
+        result = dict(status='complete', method=plan['method'], trained_events=150000, k=4, seed=42,
+            parameter_mode='full', training_steps=done['optimizer_steps'], evaluation_training_steps=0, world_size=8,
             checkpoint=inventory, checkpoint_parameter_fingerprint=fingerprint,
             manifest_sha256=plan['manifest_sha256'], selection=plan['selection'], metrics=metrics,
             primary_evaluation_scope=plan['primary_evaluation_scope'], all_paired_row_metrics=all_row_metrics,
@@ -140,11 +140,11 @@ def main():
             writer = csv.writer(f)
             writer.writerow(['method', 'events', 'K', 'axis', 'count', 'match_count', 'match_percent', 'exact_count', 'exact_percent'])
             for axis, values in metrics.items():
-                writer.writerow([plan['method'], 150000, 8, LABELS[axis], values['count'], values['match_count'],
+                writer.writerow([plan['method'], 150000, 4, LABELS[axis], values['count'], values['match_count'],
                     100 * values['match_accuracy'], values['exact_count'], 100 * values['exact_accuracy']])
-        lines = ['# WikiBigEdit 150K：CAMR K8 全参数结果', '',
+        lines = ['# WikiBigEdit 150K：CAMR 论文参考配置（K=4）全参数结果', '',
             plan['selection'], '',
-            '方法：CAMR V5 more_learned，Qwen3-8B-Base 全参数，seed 42，150,000 次更新。', '',
+            '方法：CAMR V5 论文参考配置（K=4），Qwen3-8B-Base 全参数，seed 42。', '',
             '主表沿用旧 100K 口径：直接问法使用预先冻结的歧义/冲突排除名单，Locality 使用每阶段 64 题的冻结面板。', '',
             '| 指标 | Match | Exact | Match 正确数 / 有效题数 |', '|---|---:|---:|---:|']
         for axis, values in metrics.items():

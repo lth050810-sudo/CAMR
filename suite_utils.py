@@ -1,9 +1,10 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CHECKPOINT_ROOT = Path('/mnt/yy2607004_hs/engram_checkpoints') / HERE.name
+CHECKPOINT_ROOT = Path(os.environ.get('CAMR_CHECKPOINT_ROOT', HERE / 'checkpoints'))
 AXES = {'update': ('update', 'ans'), 'rephrase': ('rephrase', 'ans'),
         'persona': ('personas', 'ans'), 'locality': ('loc', 'loc_ans')}
 LABELS = {'update': 'Original', 'rephrase': 'Rephrase', 'persona': 'Persona', 'locality': 'Locality'}
@@ -49,7 +50,7 @@ def checkpoint_inventory(path, expected_events=None, expected_steps=None):
                 files={str(p.relative_to(path)): p.stat().st_size for p in required + shards})
 
 
-def audit_actions(path, expected, expected_rows=None):
+def audit_actions(path, expected, expected_rows=None, max_replay=4, max_probe=4):
     count, peak, maximum = 0, 0.0, 0
     optimizer_steps = current_presentations = ignore_events = 0
     last_train = None
@@ -63,7 +64,9 @@ def audit_actions(path, expected, expected_rows=None):
             if expected_rows is not None and row['sample_id'] != expected_rows[count]['sample_id']:
                 raise ValueError('Source arrival order changed')
             replay, probes = row['replay_ids'], row['probe_ids']
-            if len(replay) != len(set(replay)) or len(replay) != row['replay_count'] or len(replay) > 8 or set(replay) & set(probes):
+            if (len(replay) != len(set(replay)) or len(replay) != row['replay_count']
+                    or len(replay) > max_replay or len(probes) > max_probe
+                    or set(replay) & set(probes)):
                 raise ValueError('Invalid replay/probe selection')
             train = row.get('train')
             if row['action'] == 'ignore':
