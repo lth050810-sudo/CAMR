@@ -1,36 +1,12 @@
 # CAMR
 
-This repository contains the CAMR code aligned with the paper's default
-reference configuration. The K=8 replay-budget experiment is a scaling
-variant in the paper; the primary configuration here uses K=4.
+This repository contains the CAMR implementation described in the paper.
 
 The default CAMR configuration enables safe `IGNORE` decisions. An ignored
 arrival never trains the current fact; when safe history is available, its
 maintenance step contains history only. For an active equivalent record with
 no retirement request, `IGNORE` eligibility is determined solely by current
 answer-token NLL <= 0.25, as specified in Section 4.2.
-
-## Paper-reference configuration
-
-| Parameter | Value |
-|---|---:|
-| Probe cap P | 4 |
-| Similarity threshold | 0.65 |
-| Mastery NLL threshold | 0.25 |
-| Replay cap K | 4 |
-| Writer projection dimension | 32 |
-| Rollout length | 4 |
-| Current-fact loss weight alpha | 0.5 |
-| Retention reward weight | 1.0 |
-| Token-cost weight | 0.01 |
-| Cost reference C_ref | 128 |
-| Discount gamma | 0.95 |
-| Entropy coefficient | 0.01 |
-| Critic coefficient | 0.5 |
-
-ADD and IGNORE sample replay uniformly. MERGE reserves a uniform portion of
-the K=4 budget and learns the remaining compatible targets. Reward uses the
-raw current-NLL gain plus retention gain minus normalized token cost.
 
 ## Local assets
 
