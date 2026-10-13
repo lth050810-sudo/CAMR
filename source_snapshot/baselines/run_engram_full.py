@@ -36,8 +36,6 @@ from baselines.engram_full_safety import (
 from baselines.engram_frozen_encoder import HFMeanPoolEncoder, fact_document
 from baselines.engram_full_stream import make_events, read_schedule, select_rows
 from baselines.engram_online_policy import OnlineWriterPolicy
-from baselines.engram_replay import StageStratifiedSampler, select_learned_replay, select_replay
-from baselines.engram_reward import RewardCalibrator
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -65,8 +63,8 @@ def source_fingerprints():
             ('run_engram_full.py', 'engram_full_backend.py', 'engram_online_policy.py',
              'engram_continual_core.py', 'common.py', 'engram_full_safety.py',
              'engram_grad_norm.py', 'engram_frozen_encoder.py', 'engram_full_stream.py',
-             'engram_replay.py', 'engram_training_views.py', 'longstream_protocol.py',
-             'fullstream_scale_review.py', 'engram_reward.py')}
+             'engram_training_views.py', 'longstream_protocol.py',
+             'fullstream_scale_review.py')}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -118,13 +116,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument('--ignore-behavior', choices=['original', 'disabled', 'current_only', 'skip_step'],
                    default='original', help='IGNORE control: original skips current; disabled masks IGNORE; '
                    'current_only trains current without replay; skip_step trains neither.')
-    p.add_argument('--replay-selection', choices=['legacy', 'hybrid', 'learned'], default=None,
-                   help='Hybrid reserves history for semantic neighbors, age coverage and uniform replay.')
     p.add_argument('--merge-similar-k', type=int, default=4,
-                   help='Maximum semantic neighbors inside the total MERGE replay budget in hybrid mode.')
-    p.add_argument('--recent-replay-k', type=int, default=0)
+                   help='Maximum learned compatible targets inside the total MERGE replay budget.')
     p.add_argument('--uniform-replay-fraction', type=float, default=0.5)
-    p.add_argument('--recent-window', type=int, default=64)
     p.add_argument('--training-loss', choices=['token_mean', 'role_mean'], default=None)
     p.add_argument('--matched-random-loss', action='store_true',
                    help='Explicitly label random replay as an Ours-loss control, not the standard CE baseline.')
@@ -134,8 +128,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument('--same-task-replay-only', action='store_true',
                    help='Restrict replay and probes to the current task block in multi-task streams.')
     p.add_argument('--probe-size', type=int, default=None)
-    p.add_argument('--probe-selection', choices=['uniform', 'stage_stratified'], default=None)
-    p.add_argument('--reward-mode', choices=['raw', 'normalized', 'normalized_delayed'], default=None)
     p.add_argument('--similarity-threshold', type=float, default=0.65)
     p.add_argument('--mastery-nll', type=float, default=0.25)
     p.add_argument('--hash-tables', type=int, default=8)
@@ -163,12 +155,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.training_loss = 'role_mean' if optimized or args.matched_random_loss else 'token_mean'
     if args.training_views is None:
         args.training_views = 2 if optimized and args.training_loss == 'role_mean' else 1
-    if args.replay_selection is None:
-        args.replay_selection = 'learned' if optimized else 'hybrid'
-    if args.reward_mode is None:
-        args.reward_mode = 'raw'
-    if args.probe_selection is None:
-        args.probe_selection = 'uniform'
     if args.probe_size is None:
         args.probe_size = 4
     if args.matched_random_loss and args.mode != 'random_replay':
@@ -176,14 +162,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.mode == 'random_replay' and not args.matched_random_loss:
         if args.training_loss != 'token_mean' or args.training_views != 1 or args.history_only_loss_policy != 'follow_training_loss':
             p.error('Standard random replay requires token_mean, one view, and follow_training_loss; use --matched-random-loss for a separate control')
-    if args.replay_selection == 'learned' and args.mode != 'policy':
-        p.error('Learned target replay requires policy mode')
     if not math.isfinite(args.uniform_replay_fraction) or not 0 < args.uniform_replay_fraction <= 1:
         p.error('--uniform-replay-fraction must be in (0,1]')
-    if args.replay_selection == 'learned' and args.recent_replay_k:
-        p.error('Learned replay has no fixed recent quota; use hybrid for the recent-quota ablation')
-    if args.reward_mode == 'normalized_delayed' and args.probe_size < 1:
-        p.error('Delayed retention reward requires nonempty history probes')
     if args.add_replay_k is None:
         args.add_replay_k = args.replay_k
     if args.ignore_replay_k is None:
@@ -194,10 +174,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.ignore_replay_k = 0
     positive = ('steps_per_event', 'max_length', 'max_new_tokens', 'eval_batch_size',
                 'replay_k', 'hash_tables', 'hash_bits', 'max_candidates',
-                'policy_hidden_dim', 'rollout_steps', 'log_every', 'lora_rank', 'lora_alpha', 'recent_window')
+                'policy_hidden_dim', 'rollout_steps', 'log_every', 'lora_rank', 'lora_alpha')
     nonnegative = ('save_every_events', 'stop_after_events', 'max_stages',
                    'examples_per_stage', 'repeat_every', 'probe_size',
-                   'locality_panel_size', 'multihop_panel_size', 'add_replay_k', 'ignore_replay_k', 'merge_similar_k', 'recent_replay_k')
+                   'locality_panel_size', 'multihop_panel_size', 'add_replay_k', 'ignore_replay_k', 'merge_similar_k')
     if any(getattr(args, key) <= 0 for key in positive):
         p.error('Step, batch, policy and hash sizes must be positive.')
     if any(getattr(args, key) < 0 for key in nonnegative):
@@ -212,8 +192,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error('Invalid discount, similarity threshold or hash bits.')
     if not math.isfinite(args.current_loss_weight) or not 0 < args.current_loss_weight < 1:
         p.error('--current-loss-weight must be finite and strictly between zero and one')
-    if args.replay_selection in ('hybrid', 'learned') and args.merge_similar_k < 1:
-        p.error('Hybrid MERGE must reserve at least one semantic neighbor')
+    if args.merge_similar_k < 1:
+        p.error('MERGE must reserve at least one compatible target')
     if args.model_dir.resolve() != MODEL_DIR.resolve():
         p.error(f'This run is fixed to CAMR_MODEL_DIR={MODEL_DIR}.')
     if args.replay_schedule and args.mode != 'random_replay':
@@ -315,6 +295,42 @@ def restore_memory(state: dict[str, Any]) -> FactMemory:
 def choose_probe_and_replay_pools(memory, query, row, probe_rng, probe_size, retired_ids=()):
     """Fix the audit sample before choosing an action; never train it this step."""
     return choose_safe_probe_and_replay_pools(memory, query, row, probe_rng, probe_size, retired_ids)
+
+
+def select_camr_replay(action, available, gate_candidates, budget, rng,
+                       policy, decision, similar_k=4, uniform_fraction=0.5):
+    """Sample the paper's uniform reserve and learned MERGE targets."""
+    if action not in {'add', 'merge', 'ignore'}:
+        raise ValueError('Unsupported action')
+    if budget < 0 or similar_k < 0 or not math.isfinite(uniform_fraction) or not 0 <= uniform_fraction <= 1:
+        raise ValueError('Invalid replay budget/fraction')
+    budget = min(budget, len(available))
+    target_slots = min(similar_k, budget - math.ceil(budget * uniform_fraction)) if action == 'merge' else 0
+    uniform = rng.sample(available, budget - target_slots)
+    selected_ids = {str(row['sample_id']) for row in uniform}
+    available_ids = {str(row['sample_id']) for row in gate_candidates}
+    if len(available_ids) != len(gate_candidates):
+        raise ValueError('Duplicate target candidate IDs')
+    eligible = [i for i, row in enumerate(gate_candidates) if str(row['sample_id']) not in selected_ids]
+    chosen = policy.select_targets(decision, eligible, min(target_slots, len(eligible))) if target_slots else []
+    learned = [gate_candidates[i] for i in chosen]
+    selected_ids.update(str(row['sample_id']) for row in learned)
+    missing = budget - len(uniform) - len(learned)
+    fill = []
+    if missing and len(available) <= 2 * budget:
+        pool = [row for row in available if str(row['sample_id']) not in selected_ids]
+        fill = rng.sample(pool, missing)
+    else:
+        while len(fill) < missing:
+            row = available[rng.randrange(len(available))]
+            identifier = str(row['sample_id'])
+            if identifier not in selected_ids:
+                fill.append(row)
+                selected_ids.add(identifier)
+    rows = uniform + learned + fill
+    sources = (['random_history'] * len(uniform) + ['learned_history'] * len(learned)
+               + ['random_history'] * len(fill))
+    return rows, sources
 
 
 def compatible_config(args, manifest_hash, encoder_hash):
@@ -490,10 +506,7 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
                                 lr=args.policy_lr, gamma=args.gamma, entropy_coef=args.entropy_coef,
                                 value_coef=args.value_coef, seed=args.seed)
     replay_rng, probe_rng = random.Random(args.seed + 9001), random.Random(args.seed + 9002)
-    probe_sampler = StageStratifiedSampler(probe_rng) if args.probe_selection == 'stage_stratified' else probe_rng
-    reward_calibrator = RewardCalibrator()
-    delayed_rewards = []
-    reward_records = []
+    probe_sampler = probe_rng
     signature = compatible_config(args, sha256_file(args.manifest), encoder.provenance.get('provenance_sha256'))
     digest = stream_digest(events)
     retired_ids, seen_ids, embeddings, aliases = set(), set(), {}, {}
@@ -517,9 +530,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         embeddings = resumed['embeddings']
         aliases = resumed['aliases']
         replay_history = resumed['replay_history']
-        reward_calibrator.load_state_dict(resumed['reward_calibrator'])
-        delayed_rewards = copy.deepcopy(resumed['delayed_rewards'])
-        reward_records = copy.deepcopy(resumed['reward_records'])
         event_cursor = resumed['event_cursor']
         actions, metrics = resumed['actions'], resumed['metrics']
         predictions, updates = resumed['predictions'], resumed['policy_updates']
@@ -562,22 +572,10 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
             'ADD=current+uniform safe history; MERGE=current+uniform reserve+learned safe targets; '
             'IGNORE follows ignore_effect and ignore_replay_k; '
             'MERGE denotes joint consolidation, not structural memory deduplication'
-        ) if args.replay_selection == 'learned' else (
-            'ADD=current+recent/age-coverage/uniform safe history; '
-            'MERGE=current+up to merge_similar_k related history then recent/age-coverage/uniform fill; '
-            'IGNORE follows ignore_effect and ignore_replay_k; '
-            'always_add=current only; random_replay=uniform history'
-        ) if args.replay_selection == 'hybrid' else (
-            'ADD=current+up to add_replay_k random safe non-probe history; '
-            'MERGE=current+up to replay_k compatible cosine-ranked history; IGNORE follows ignore_effect and ignore_replay_k; '
-            'always_add=current only; random_replay=random history (ADD only; scheduled actions are restricted to ADD)'
         )),
-        'probe_policy': args.probe_selection + '; pre-action training history only; disjoint from this event replay',
-        'reward': args.reward_mode + '; raw mode uses current gain + retention_weight * mean probe gain '
-                  '- cost_weight * logical training tokens / 128; normalized modes are ablations',
-        'delayed_reward_scope': 'history measured again at rollout boundary; observed outcome includes intervening updates, not a counterfactual effect',
-        'reward_calibration': reward_calibrator.state_dict()['config'],
-        'finalized_reward_log': 'delayed_rewards.jsonl; actions.jsonl contains explicitly marked provisional rewards in delayed mode',
+        'probe_policy': 'uniform; pre-action training history only; disjoint from this event replay',
+        'reward': 'current gain + retention_weight * mean probe gain '
+                  '- cost_weight * logical training tokens / 128',
         'retirement_policy': 'explicit supersedes_sample_ids only; ambiguous differing values are never auto-retired',
         'budget_note': 'matched replay counts/steps do not necessarily match tokens; replicated FSDP physical tokens reported separately',
         'resumed_event_cursor': event_cursor,
@@ -587,8 +585,8 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
     atomic_json(args.output_dir / 'run_config.json', config)
     atomic_json(args.output_dir / 'selected_stream.json', rows)
     # A resumed run uses a fresh directory and retains its parent's trace prefix.
-    for filename, records in (('actions.jsonl', actions), ('predictions.jsonl', predictions), ('policy_updates.jsonl', updates),
-                              ('delayed_rewards.jsonl', reward_records)):
+    for filename, records in (('actions.jsonl', actions), ('predictions.jsonl', predictions),
+                              ('policy_updates.jsonl', updates)):
         if records:
             append_jsonl(args.output_dir / filename, records)
     atomic_json(args.output_dir / 'metrics.json', metrics)
@@ -616,8 +614,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
                  'replay_rng': replay_rng.getstate(), 'probe_rng': probe_rng.getstate(),
                  'retired_ids': sorted(retired_ids), 'seen_ids': sorted(seen_ids), 'embeddings': embeddings,
                  'aliases': aliases, 'replay_history': replay_history,
-                 'reward_calibrator': reward_calibrator.state_dict(), 'delayed_rewards': copy.deepcopy(delayed_rewards),
-                 'reward_records': copy.deepcopy(reward_records),
                  'event_cursor': cursor, 'actions': actions, 'metrics': metrics, 'predictions': predictions,
                  'policy_updates': updates, 'action_counts': dict(action_counts), 'totals': dict(totals), 'stages': stages}
         path = args.checkpoint_dir / f'event{cursor:06d}'
@@ -642,52 +638,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         updates.append(record)
         append_jsonl(args.output_dir / 'policy_updates.jsonl', [record])
         return record
-
-    def settle_delayed_rewards(before_event, blocked_ids=()):
-        """Credit observed training-history retention before changing the policy.
-
-        Pending decisions all belong to the same policy version. Explicitly
-        retired/conflicting history is removed, never scored against stale
-        labels. The bounded pending panel is checkpointed for exact resume.
-        """
-        if not delayed_rewards:
-            return
-        blocked = set(retired_ids) | set(blocked_ids)
-        panel = {}
-        for pending in delayed_rewards:
-            for probe in pending['probes']:
-                if probe['sample_id'] not in blocked:
-                    panel.setdefault(probe['sample_id'], probe)
-        scores = {}
-        delayed_tokens = 0
-        if panel:
-            losses, delayed_tokens = driver.answer_nll(list(panel.values()))
-            if len(losses) != len(panel) or not all(math.isfinite(value) for value in losses):
-                raise ValueError('Invalid delayed retention measurements')
-            scores = dict(zip(panel, losses))
-        totals['reward_forward_tokens'] += delayed_tokens
-        totals['physical_reward_forward_tokens'] += delayed_tokens * driver.backend.world_size
-        totals['delayed_reward_forward_tokens'] += delayed_tokens
-        for pending in delayed_rewards:
-            gains = [old_loss - scores[probe['sample_id']]
-                     for probe, old_loss in zip(pending['probes'], pending['before_nll'])
-                     if probe['sample_id'] in scores]
-            retention = sum(gains) / len(gains) if gains else 0.0
-            components = reward_calibrator.score(
-                pending['current_gain'], retention, args.retention_weight, pending['cost_penalty'])
-            policy.replace_pending_reward(pending['decision_id'], components['reward'])
-            record = {
-                'event': pending['event'], 'decision_id': pending['decision_id'],
-                'measured_before_event': before_event, 'lag_events': before_event - pending['event'],
-                'probe_count': len(gains), 'dropped_probe_count': len(pending['probes']) - len(gains),
-                'retention_gain': retention, **components}
-            reward_records.append(record)
-            append_jsonl(args.output_dir / 'delayed_rewards.jsonl', [record])
-        delayed_rewards.clear()
-        if metrics and metrics[-1].get('events') == before_event:
-            metrics[-1]['cumulative_cost'].update(dict(totals))
-            metrics[-1]['cumulative_cost']['forward_accounting'] = copy.deepcopy(getattr(driver.backend, 'forward_accounting', {}))
-            atomic_json(args.output_dir / 'metrics.json', metrics)
 
     if not resumed and not args.skip_base_eval:
         if args.longstream:
@@ -751,7 +701,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
             if gate_candidates else torch.empty((0, dim))
         policy_update = None
         if args.mode == 'policy' and not exact_schedule and policy.pending_count >= args.rollout_steps:
-            settle_delayed_rewards(index, query.get('conflicting_history_ids', ()))
             bootstrap = policy.choose(features, vector, candidate_vectors, allow_ignore, allow_merge, mode='bootstrap')
             policy_update = log_update(policy.finish_rollout(bootstrap_decision=bootstrap, terminal=False), index)
         if exact_schedule:
@@ -804,22 +753,13 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
                 replay = replay_rng.sample(available, count)
                 replay_source = 'random_history' if replay else 'none'
                 replay_sources = ['random_history'] * len(replay)
-            elif args.replay_selection == 'learned':
+            elif args.mode == 'policy':
                 budget = (args.ignore_replay_k if decision['action'] == 'ignore' else
                           args.replay_k if decision['action'] == 'merge' else args.add_replay_k)
-                replay, replay_sources = select_learned_replay(
+                replay, replay_sources = select_camr_replay(
                     decision['action'], available, [item['row'] for item in gate_candidates],
                     budget, replay_rng, policy, decision, args.merge_similar_k, args.uniform_replay_fraction)
                 replay_source = 'learned_uniform_history' if replay else 'none'
-            elif args.replay_selection == 'hybrid' and args.mode != 'always_add':
-                budget = (args.ignore_replay_k if decision['action'] == 'ignore' else
-                          args.replay_k if decision['action'] == 'merge' else args.add_replay_k)
-                replay, replay_sources = select_replay(
-                    decision['action'], available, related, budget, replay_rng,
-                    replay_history, index, similar_k=args.merge_similar_k,
-                    recent_k=args.recent_replay_k, recent_window=args.recent_window,
-                    ignore_replay=decision['action'] == 'ignore')
-                replay_source = 'hybrid_history' if replay else 'none'
             elif decision['action'] == 'merge':
                 replay = related[:args.replay_k]
                 replay_source = 'similar_history'
@@ -861,19 +801,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         trained_tokens = int(train_stats['sequence_tokens']) if train_stats else 0
         reward = current_gain + args.retention_weight * retention_gain - args.cost_weight * trained_tokens / 128
         reward_components = {'reward': reward, 'mode': 'raw'}
-        if args.mode == 'policy' and not exact_schedule and args.reward_mode != 'raw':
-            if args.reward_mode == 'normalized_delayed':
-                # No update consumes this placeholder: settle before finish_rollout.
-                reward = 0.0
-                reward_components = {'reward': reward, 'mode': 'pending_delayed'}
-                delayed_rewards.append({
-                    'event': index, 'decision_id': decision['state']['decision_id'],
-                    'current_gain': current_gain, 'cost_penalty': args.cost_weight * trained_tokens / 128,
-                    'probes': copy.deepcopy(probes), 'before_nll': list(before[1:])})
-            else:
-                reward_components = reward_calibrator.score(
-                    current_gain, retention_gain, args.retention_weight, args.cost_weight * trained_tokens / 128)
-                reward = reward_components['reward']
         if not math.isfinite(reward):
             raise ValueError('Nonfinite policy reward')
         if args.mode == 'policy' and not exact_schedule:
@@ -976,7 +903,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
                               'optimizer_steps': totals['optimizer_steps']}, ensure_ascii=False), flush=True)
         stopped = bool((args.stop_after_events and event_cursor >= args.stop_after_events or event_cursor >= target_events()) and event_cursor < len(events))
         if event_cursor == target_events() and args.mode == 'policy' and not exact_schedule and policy.pending_count:
-            settle_delayed_rewards(event_cursor, query.get('conflicting_history_ids', ()))
             log_update(policy.finish_rollout(terminal=True), event_cursor, terminal=True)
         if stopped or (args.longstream and (stage_done or prefix_done)) or (args.save_every_events and event_cursor % args.save_every_events == 0 and event_cursor < len(events)):
             final_checkpoint = checkpoint(event_cursor)
@@ -992,7 +918,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
     if args.longstream and complete and totals['current_fact_presentations'] != totals['current_events']:
         raise ValueError('Single-current-pass audit failed: current presentations differ from current-training events')
     if complete and args.mode == 'policy' and not exact_schedule and policy.pending_count:
-        settle_delayed_rewards(event_cursor, query.get('conflicting_history_ids', ()))
         log_update(policy.finish_rollout(terminal=True), event_cursor, terminal=True)
     if complete and args.save_final_checkpoint and last_saved_cursor != event_cursor:
         final_checkpoint = checkpoint(event_cursor)
@@ -1011,7 +936,6 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
         'policy_optimizer_updates': sum(bool(u.get('updated')) for u in updates),
         'actor_optimizer_updates': sum(bool(u.get('actor_updated')) for u in updates),
         'selector_optimizer_updates': sum(bool(u.get('selector_updated')) for u in updates),
-        'finalized_reward_count': len(reward_records), 'reward_calibrator': reward_calibrator.state_dict(),
         'policy_pending_transitions': policy.pending_count,
         'replay_coverage': {
             'stored_facts': len(replay_history),

@@ -8,7 +8,6 @@ Cache is derived state, discarded/rebuilt after loading a memory checkpoint.
 from __future__ import annotations
 
 import copy
-import heapq
 from collections import defaultdict
 from collections.abc import Sequence
 
@@ -311,92 +310,3 @@ def install(policy_module):
     policy_module.filtered_query = safe_query
     policy_module.choose_probe_and_replay_pools = choose_safe_probe_and_replay_pools
     policy_module.explicit_retirements = explicit_retirements
-    if hasattr(policy_module, 'select_replay'):
-        policy_module.select_replay = select_replay
-
-
-def select_replay(action, available, related, k, rng, history_stats, event_index, similar_k=2,
-                  recent_k=0, recent_window=64, ignore_replay=False):
-    """Exact hybrid replay, without copying/sorting the whole row pool.
-
-    All available statistics are still validated on each invocation, so even
-    external modifications cannot bypass the original transactional checks.
-    Coverage uses a size-k heap instead of sorting every available row.
-    Random choice retains the original lexicographic sample-ID population.
-    """
-    def nonnegative(value, name):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f'{name} must be a nonnegative integer')
-        return value
-
-    def identifier_of(row):
-        value = row.get('sample_id')
-        if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value):
-            raise ValueError('Every replay row requires a nonempty sample_id')
-        return str(value)
-
-    if action not in {'add', 'merge', 'ignore'}:
-        raise ValueError('action must be add, merge or ignore')
-    nonnegative(k, 'k')
-    nonnegative(similar_k, 'similar_k')
-    nonnegative(recent_k, 'recent_k')
-    nonnegative(recent_window, 'recent_window')
-    if recent_k and not recent_window:
-        raise ValueError('recent_window must be positive')
-    nonnegative(event_index, 'event_index')
-    if (action == 'ignore' and not ignore_replay) or k == 0:
-        return [], []
-    # FactMemory owns immutable train-only rows. Retain references internally
-    # and copy only the chosen rows; ordinary sequences preserve object identity.
-    is_view = isinstance(available, RowView)
-    rows = (available.memory.rows[int(i)] for i in available.indices) if is_view else iter(available)
-    by_id = {}
-    for row in rows:
-        by_id.setdefault(identifier_of(row), row)
-    budget = min(k, len(by_id))
-    if budget == 0:
-        return [], []
-
-    def coverage_key(identifier):
-        stats = history_stats.get(identifier, {})
-        inserted, last_replayed = stats.get('inserted_event', -1), stats.get('last_replayed_event')
-        count = nonnegative(stats.get('replay_count', 0), 'replay_count')
-        for name, value in (('inserted_event', inserted), ('last_replayed_event', last_replayed)):
-            if value is None and name == 'last_replayed_event':
-                continue
-            if isinstance(value, bool) or not isinstance(value, int) or not -1 <= value < event_index:
-                raise ValueError(f'{name} for {identifier} must precede event_index')
-        return (inserted if last_replayed is None else last_replayed) - event_index, count, identifier
-
-    # Every key is evaluated before RNG mutation, including related rows.
-    coverage_order = heapq.nsmallest(budget, by_id, key=coverage_key)
-    selected, selected_ids, sources = [], set(), []
-    if action == 'merge' and similar_k:
-        for row in related:
-            identifier = identifier_of(row)
-            if identifier in by_id and identifier not in selected_ids:
-                selected.append(identifier)
-                selected_ids.add(identifier)
-                sources.append('similar_history')
-                if len(selected) >= min(similar_k, budget):
-                    break
-    recent_count = min(recent_k, budget - len(selected))
-    if recent_count:
-        recent_pool = [sid for sid in by_id if sid not in selected_ids
-                       and history_stats.get(sid, {}).get('inserted_event', -1) >= max(0, event_index - recent_window)]
-        recent = heapq.nsmallest(recent_count, recent_pool,
-                                key=lambda sid: (coverage_key(sid)[1], coverage_key(sid)[0], sid))
-        selected.extend(recent)
-        selected_ids.update(recent)
-        sources.extend(['recent_history'] * len(recent))
-    coverage_count = (budget - len(selected) + 1) // 2
-    coverage = [identifier for identifier in coverage_order if identifier not in selected_ids][:coverage_count]
-    selected.extend(coverage)
-    selected_ids.update(coverage)
-    sources.extend(['coverage_history'] * len(coverage))
-    random_count = budget - len(selected)
-    if random_count:
-        random_pool = sorted(identifier for identifier in by_id if identifier not in selected_ids)
-        selected.extend(rng.sample(random_pool, random_count))
-        sources.extend(['random_history'] * random_count)
-    return ([copy.deepcopy(by_id[sid]) for sid in selected] if is_view else [by_id[sid] for sid in selected]), sources
