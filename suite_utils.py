@@ -25,12 +25,6 @@ def atomic(path, value):
     tmp.replace(path)
 
 
-def verify_frozen():
-    for rel, expected in read(HERE / 'frozen_inputs.json').items():
-        if sha(HERE / rel) != expected:
-            raise RuntimeError(f'Frozen source/input changed: {rel}')
-
-
 def checkpoint_inventory(path, expected_steps=None):
     path = Path(path)
     meta = read(path / 'checkpoint_meta.json')

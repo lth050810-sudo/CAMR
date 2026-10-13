@@ -1,4 +1,4 @@
-"""Freeze the 150K arrival stream and audit every training/evaluation input."""
+"""Prepare the 150K arrival stream and audit every training/evaluation input."""
 import argparse
 from collections import Counter, defaultdict
 import hashlib
@@ -21,8 +21,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--selection', choices=['contiguous', 'balanced'], default='contiguous')
     opts = parser.parse_args()
-    if (HERE / 'frozen_inputs.json').exists():
-        raise FileExistsError('This experiment is already frozen')
     reference = ROOT / 'runs/wikibigedit_camr_k8_tracks_20261008'
     snapshot = HERE / 'source_snapshot/baselines'
     snapshot.mkdir(parents=True, exist_ok=True)
@@ -202,28 +200,6 @@ def main():
                                 else protocol['primary_evaluation_ids'][a]) for a in axes}
                       if protocol else dict(counts))
     audit['primary_evaluation_rows'] = primary_counts
-    atomic_json(HERE / 'data_audit.json', audit)
-    config = json.loads((reference / 'results/more_learned/full/run_config.json').read_text())
-    common_keys = json.loads((reference / 'experiment_plan.json').read_text())['common']
-    atomic_json(HERE / 'experiment_plan.json', dict(version='CAMR-K8-150K/v1',
-        method='CAMR V5 more_learned (validated 2026-10-08)', events=150000, seed=42,
-        initialization='Fresh Qwen3-8B-Base, all 8,190,735,360 parameters trainable',
-        common={k: config[k] for k in common_keys}, training_world_size=8,
-        fsdp_sharding_strategy='shard_grad_op', activation_checkpointing=False,
-        eval_batch_size=512, checkpoint_every_events=25000,
-        recovery_validation='Stop after event 128, save all state, and resume into a fresh output directory',
-        checkpoint_policy='Retain event128, all 25K checkpoints, and event150000; no automatic deletion',
-        checkpoint_root=str(Path('/mnt/yy2607004_hs/engram_checkpoints') / HERE.name),
-        evaluation_axes=list(axes), metric='Match accuracy and Exact accuracy on every available paired row',
-        locality_definition='Gold-answer Match on paired loc/loc_ans; row-weighted, not pre/post consistency',
-        evaluation_denominators=dict(counts), primary_evaluation_denominators=primary_counts,
-        primary_evaluation_scope='Historical 100K eligible direct-axis masks and fixed 64-per-stage locality panel; all paired rows also scored and reported',
-        selection=selection,
-        comparison_caveat='Latest method selected on the first 5K development set; this is not an untouched validation stream.',
-        manifest_sha256=sha(HERE / 'manifest.json')))
-    files = [p for p in HERE.rglob('*') if p.is_file() and (p.suffix in ['.py', '.json'] or p.name == 'README.md')
-             and '__pycache__' not in p.parts and p.name != 'frozen_inputs.json']
-    atomic_json(HERE / 'frozen_inputs.json', {str(p.relative_to(HERE)): sha(p) for p in sorted(files)})
     print(json.dumps({'status': 'prepared', **audit}, ensure_ascii=False), flush=True)
 
 

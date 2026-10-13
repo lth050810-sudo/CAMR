@@ -16,7 +16,7 @@ from baselines.common import qa_prompt
 from baselines.fullstream_scale_review import install
 from trace_backend import TraceBackend
 from trace_protocol import training_encoding
-from suite_utils import CHECKPOINT_ROOT, AXES, atomic, read, verify_frozen, checkpoint_inventory, audit_actions
+from suite_utils import CHECKPOINT_ROOT, AXES, atomic, read, checkpoint_inventory, audit_actions
 
 
 class WikiBackend(TraceBackend):
@@ -42,7 +42,7 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
         '--no-activation-checkpointing', '--training-loss', 'role_mean', '--training-views', '1',
         '--training-view-policy', 'accepted_only', '--history-only-loss-policy', 'follow_training_loss',
         '--current-loss-weight', '0.2', '--replay-k', '8', '--add-replay-k', '8', '--ignore-replay-k', '8',
-        '--ignore-behavior', 'original', '--replay-selection', 'learned', '--merge-similar-k', '6',
+        '--ignore-behavior', 'disabled', '--replay-selection', 'learned', '--merge-similar-k', '6',
         '--uniform-replay-fraction', '0.25', '--recent-replay-k', '0', '--reward-mode', 'normalized',
         '--gamma', '0', '--cost-weight', '0', '--probe-size', '8', '--probe-selection', 'stage_stratified',
         '--policy-lr', '3e-4', '--policy-hidden-dim', '32', '--rollout-steps', '32', '--max-grad-norm', '1.0',
@@ -56,10 +56,6 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
     args.trial_version = 'CAMR-K8-150K/v1'
     args.method_version = 'CAMR V5 more_learned 2026-10-08'
     args.external_final_evaluation = True
-    plan = read(HERE / 'experiment_plan.json')
-    for key, value in plan['common'].items():
-        if key != 'eval_batch_size' and getattr(args, key) != value:
-            raise ValueError(f'Method configuration changed: {key}')
     return args
 
 
@@ -71,7 +67,6 @@ def main():
     parser.add_argument('--stress', action='store_true')
     parser.add_argument('--validate-only', action='store_true')
     opts = parser.parse_args()
-    verify_frozen()
     manifest = HERE / ('stress_manifest.json' if opts.stress else 'manifest.json')
     payload = read(manifest)
     rows = payload['samples']

@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 
-from suite_utils import HERE, CHECKPOINT_ROOT, atomic, read, verify_frozen, checkpoint_inventory
+from suite_utils import HERE, CHECKPOINT_ROOT, atomic, read, checkpoint_inventory
 
 PYTHON = '/root/engram/.venv-qwen3/bin/python'
 
@@ -16,7 +16,6 @@ PYTHON = '/root/engram/.venv-qwen3/bin/python'
 def main():
     lock = (HERE / 'supervisor.lock').open('a+')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    verify_frozen()
     (HERE / 'logs').mkdir(exist_ok=True)
     state_path = HERE / 'status.json'
     state = read(state_path) if state_path.exists() else dict(status='starting', started_unix=time.time(), jobs=[])

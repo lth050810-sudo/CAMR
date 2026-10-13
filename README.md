@@ -1,11 +1,8 @@
-# CAMR V5 K8 with IGNORE
+# CAMR V5 K8
 
-This repository contains only the latest CAMR V5 K8 code snapshot, with the
-ADD, MERGE, and IGNORE policy actions enabled. The default training entry point
-uses the original IGNORE behavior: a certified redundant current fact is
-skipped while selected safe history is maintained.
+This repository contains only the latest CAMR V5 K8 code snapshot.
 
-- `prepare.py` prepares and freezes the experiment inputs.
+- `prepare.py` prepares the experiment inputs.
 - `train.py` launches the eight-GPU training workflow.
 - `evaluate.py` performs the final evaluation.
 - `supervise.py` supervises preparation, training, and evaluation.

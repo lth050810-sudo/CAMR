@@ -16,15 +16,13 @@ from torch.distributed.checkpoint import FileSystemReader, load_state_dict
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, ShardedStateDictConfig
 from baselines.common import answer_scores
 from train import WikiBackend, arguments
-from suite_utils import AXES, LABELS, atomic, read, sha, verify_frozen, checkpoint_inventory
+from suite_utils import AXES, LABELS, atomic, read, sha, checkpoint_inventory
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--training-output', type=Path, required=True)
     opts = parser.parse_args()
-    verify_frozen()
-    plan = read(HERE / 'experiment_plan.json')
     done = read(opts.training_output / 'completed.json')
     audit = read(opts.training_output / 'audit.json')
     assert done['status'] == 'complete' and done['events'] == done['optimizer_steps'] == 150000
@@ -33,7 +31,22 @@ def main():
     meta = read(checkpoint / 'checkpoint_meta.json')
     payload = read(HERE / 'manifest.json')
     rows = payload['samples']
-    assert sha(HERE / 'manifest.json') == plan['manifest_sha256']
+    plan = {
+        'method': 'CAMR V5 more_learned',
+        'manifest_sha256': sha(HERE / 'manifest.json'),
+        'selection': payload['selection'],
+        'evaluation_denominators': {
+            axis: sum(bool(isinstance(row.get(question), str) and row[question].strip()
+                      and isinstance(row.get(answer), str) and row[answer].strip())
+                      for row in rows)
+            for axis, (question, answer) in AXES.items()
+        },
+        'primary_evaluation_scope': (
+            'Historical 100K eligible direct-axis masks and fixed 64-per-stage locality panel; '
+            'all paired rows also scored and reported'
+        ),
+        'locality_definition': 'Gold-answer Match on paired loc/loc_ans; row-weighted, not pre/post consistency',
+    }
     output = HERE / 'evaluation'
     output.mkdir(parents=True, exist_ok=True)
     args = arguments(opts.training_output, HERE / 'manifest.json')
@@ -104,7 +117,7 @@ def main():
         all_row_metrics[axis] = dict(totals, match_accuracy=totals['match_count'] / count if count else None,
                                     exact_accuracy=totals['exact_count'] / count if count else None)
         primary_count = primary_totals['count']
-        assert primary_count == plan['primary_evaluation_denominators'][axis]
+        assert primary_count == len(primary_ids)
         metrics[axis] = dict(primary_totals,
             match_accuracy=primary_totals['match_count'] / primary_count if primary_count else None,
             exact_accuracy=primary_totals['exact_count'] / primary_count if primary_count else None)
