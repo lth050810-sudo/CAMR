@@ -95,8 +95,8 @@ def main():
                     continue
                 try:
                     inv = checkpoint_inventory(path)
-                    if inv['optimizer_steps'] < 150000:
-                        candidates.append((inv['optimizer_steps'], path))
+                    if inv['event_cursor'] < 150000:
+                        candidates.append((inv['event_cursor'], path))
                 except (ValueError, OSError):
                     continue
             cursor, resume = max(candidates)

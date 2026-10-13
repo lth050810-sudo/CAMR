@@ -989,8 +989,8 @@ def run(args, driver: BackendCoordinator) -> dict[str, Any]:
                 'elapsed_seconds': time.perf_counter() - started, 'checkpoint_seconds': checkpoint_seconds,
                 'world_size': driver.backend.world_size})
     complete = event_cursor == target_events()
-    if args.longstream and complete and totals['current_fact_presentations'] != len(seen_ids):
-        raise ValueError('Single-current-pass audit failed: current presentations differ from unique arrivals')
+    if args.longstream and complete and totals['current_fact_presentations'] != totals['current_events']:
+        raise ValueError('Single-current-pass audit failed: current presentations differ from current-training events')
     if complete and args.mode == 'policy' and not exact_schedule and policy.pending_count:
         settle_delayed_rewards(event_cursor, query.get('conflicting_history_ids', ()))
         log_update(policy.finish_rollout(terminal=True), event_cursor, terminal=True)

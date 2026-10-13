@@ -42,7 +42,7 @@ def arguments(output, manifest, resume=None, stop=0, stress=False):
         '--no-activation-checkpointing', '--training-loss', 'role_mean', '--training-views', '1',
         '--training-view-policy', 'accepted_only', '--history-only-loss-policy', 'follow_training_loss',
         '--current-loss-weight', '0.2', '--replay-k', '8', '--add-replay-k', '8', '--ignore-replay-k', '8',
-        '--ignore-behavior', 'disabled', '--replay-selection', 'learned', '--merge-similar-k', '6',
+        '--ignore-behavior', 'original', '--replay-selection', 'learned', '--merge-similar-k', '6',
         '--uniform-replay-fraction', '0.25', '--recent-replay-k', '0', '--reward-mode', 'normalized',
         '--gamma', '0', '--cost-weight', '0', '--probe-size', '8', '--probe-selection', 'stage_stratified',
         '--policy-lr', '3e-4', '--policy-hidden-dim', '32', '--rollout-steps', '32', '--max-grad-norm', '1.0',
@@ -93,15 +93,20 @@ def main():
     else:
         driver = runner.BackendCoordinator(backend)
         start = time.monotonic()
-        resume_cursor = read(opts.resume / 'checkpoint_meta.json')['total_optimizer_steps'] if opts.resume else 0
+        resume_cursor = int(opts.resume.name.removeprefix('event')) if opts.resume else 0
         progress_last = [start, resume_cursor]
         resume_expected = [None]
+        resume_verified = [not opts.resume]
         original_append = runner.append_jsonl
         original_load = driver.load_checkpoint
 
         def load(path):
             state = original_load(path)
-            resume_expected[0] = state['actions'][-1]['train']['parameter_fingerprint_after']
+            previous = next((record.get('train') for record in reversed(state['actions'])
+                             if record.get('train') is not None), None)
+            if previous is None:
+                raise ValueError('Resume checkpoint has no completed optimizer step')
+            resume_expected[0] = previous['parameter_fingerprint_after']
             return state
 
         driver.load_checkpoint = load
@@ -112,10 +117,12 @@ def main():
                 return
             last = records[-1]
             n = last['event'] + 1
-            if opts.resume and n == resume_cursor + 1:
-                assert last['train']['parameter_fingerprint_before'] == resume_expected[0], 'Resume model fingerprint differs'
+            train = last.get('train')
+            if opts.resume and n > resume_cursor and not resume_verified[0] and train is not None:
+                assert train['parameter_fingerprint_before'] == resume_expected[0], 'Resume model fingerprint differs'
+                resume_verified[0] = True
                 atomic(HERE / 'resume_validation.json', dict(status='passed', resume_event=resume_cursor,
-                    first_resumed_event=n, training_output=str(opts.output),
+                    first_resumed_training_event=n, training_output=str(opts.output),
                     model_fingerprint_boundary_verified=True, optimizer_policy_rng_restored=True))
             if n <= resume_cursor or (n != 1 and n % 100):
                 return
@@ -123,7 +130,7 @@ def main():
             seconds = now - start
             done = n - resume_cursor
             rate = done / seconds if seconds > 0 else None
-            train = last.get('train') or {}
+            train = train or {}
             atomic(opts.output / 'progress.json', dict(status='training', events=n, total_events=len(rows),
                 resume_cursor=resume_cursor, elapsed_seconds=seconds, events_per_second=rate,
                 remaining_training_seconds=(len(rows) - n) / rate if rate else None,
@@ -138,7 +145,7 @@ def main():
             atomic(opts.output / 'progress.json', dict(status='saving_checkpoint', events=state['event_cursor'],
                 total_events=len(rows), checkpoint=str(path), world_size=8))
             saved = original_save(path, state)
-            inventory = checkpoint_inventory(path, state['event_cursor'])
+            inventory = checkpoint_inventory(path, state['event_cursor'], state['totals']['optimizer_steps'])
             atomic(opts.output / 'checkpoint_inventory' / (Path(path).name + '.json'), inventory)
             return saved
 
@@ -161,18 +168,14 @@ def main():
                     global_batch_size=512, all_four_axes_present=True, world_size=8))
             result = runner.run(args, driver)
             expected = opts.stop_after or len(rows)
-            assert result['events'] == result['optimizer_steps'] == result['totals']['current_fact_presentations'] == expected
+            assert result['events'] == expected
             trace = audit_actions(opts.output / 'actions.jsonl', expected, rows)
-            if opts.resume:
-                with (opts.output / 'actions.jsonl').open() as stream:
-                    previous = None
-                    for line in stream:
-                        record = json.loads(line)
-                        if record['event'] == resume_cursor:
-                            assert previous['train']['parameter_fingerprint_after'] == record['train']['parameter_fingerprint_before'], 'Resume model fingerprint differs'
-                            break
-                        previous = record
-            inventory = checkpoint_inventory(result['final_checkpoint'], expected) if not opts.stress else None
+            assert trace['optimizer_steps'] == result['optimizer_steps']
+            assert trace['current_fact_presentations'] == result['totals']['current_fact_presentations']
+            assert trace['ignore_events'] == result['action_counts'].get('ignore', 0)
+            if opts.resume and not resume_verified[0]:
+                raise RuntimeError('Resume completed without a post-resume optimizer step to verify')
+            inventory = checkpoint_inventory(result['final_checkpoint'], expected, result['optimizer_steps']) if not opts.stress else None
             atomic(opts.output / 'audit.json', dict(status='passed', **trace, checkpoint=inventory,
                 resumed_from=str(opts.resume) if opts.resume else None, all_parameters_trainable=True,
                 trained_parameters=8190735360, world_size=8, method_version=args.method_version))

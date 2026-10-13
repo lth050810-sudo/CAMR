@@ -25,9 +25,9 @@ def main():
     opts = parser.parse_args()
     done = read(opts.training_output / 'completed.json')
     audit = read(opts.training_output / 'audit.json')
-    assert done['status'] == 'complete' and done['events'] == done['optimizer_steps'] == 150000
+    assert done['status'] == 'complete' and done['events'] == 150000
     checkpoint = Path(done['final_checkpoint'])
-    inventory = checkpoint_inventory(checkpoint, 150000)
+    inventory = checkpoint_inventory(checkpoint, 150000, done['optimizer_steps'])
     meta = read(checkpoint / 'checkpoint_meta.json')
     payload = read(HERE / 'manifest.json')
     rows = payload['samples']
